@@ -196,8 +196,7 @@
 
     // Print minimal pointers to console (no words)
     const consoleLog = document.getElementById('consoleLog');
-    function clog(msg){ console.log(msg); consoleLog.textContent += '
-'+msg; }
+    function clog(msg){ console.log(msg); consoleLog.textContent += ''+msg; }
     clog('Dev API available: _clueApi. Use _clueApi.listMapping() and _clueApi.revealWord(index) to learn positions. Words are not printed.');
     clog('To reveal letters in the CSS grid, in Elements select a .css-cell and toggle the custom property --s to 1 (Computed > Styles) or add style="--s:1" to the element.');
 
