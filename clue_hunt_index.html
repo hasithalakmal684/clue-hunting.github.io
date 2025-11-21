@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dev/QA Clue Hunt — Harder, Dynamic</title>
+  <meta name="color-scheme" content="dark light">
+  <style>
+    :root{--accent:#7ee;--muted:#9ab}
+    html,body{height:100%}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;margin:0;background:#081028;color:#dceff2;padding:28px}
+    .wrap{max-width:1024px;margin:12px auto;padding:18px;background:linear-gradient(180deg,#021226,#04283a);border-radius:12px}
+    h1{margin:0 0 6px}
+    p.lead{color:var(--muted);margin-top:0}
+    .panel{background:rgba(255,255,255,0.02);padding:12px;border-radius:8px;margin:12px 0}
+    label{display:block;margin:8px 0 6px;color:var(--muted)}
+    input[type=text]{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+    button{margin-top:8px;padding:8px 12px;border-radius:8px;border:0;background:var(--accent);color:#012;cursor:pointer}
+    .ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+    .muted{color:var(--muted)}
+    .log{font-family:monospace;background:#02101a;padding:10px;border-radius:8px;color:#9ff;max-height:140px;overflow:auto}
+
+    /* --- Dynamic CSS clue area: to read this clue players must inspect computed styles. --- */
+    .css-grid{display:grid;grid-template-columns:repeat(8,28px);gap:6px;align-items:center}
+    .css-cell{width:28px;height:28px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:transparent}
+    /* Cells will receive CSS custom properties at runtime: --c (color), --t (text), --s (show) */
+    .css-cell::after{content:var(--t);font-size:11px;display:block;line-height:28px;text-align:center;opacity:var(--s,0)}
+
+    /* Hidden pseudo-element that is only visible if user toggles the custom property --s to 1 in inspector */
+    .secret-tip::after{content:var(--content);font-weight:bold;color:lightgreen}
+
+    /* small helper for accessibility */
+    .kbd{background:#071a2a;padding:2px 6px;border-radius:4px;font-family:monospace;font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Dev/QA Clue Hunt — Hard Mode</h1>
+    <p class="lead">Clues are generated at runtime. They are <em>not</em> hardcoded in the served HTML. You will need to use DevTools (Elements, Styles, Computed, Console, Network) and tweak CSS/custom properties to reveal secrets. The goal: find all 10 dynamic clues.</p>
+
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>Current step</strong>: <span id="stepNum">1</span>/10</div>
+        <div class="muted">Seed: <span id="seedLabel">(session)</span></div>
+      </div>
+      <p id="inst" style="margin-top:8px">Follow the instructions for each step. Hints are available but will be intentionally cryptic.</p>
+
+      <label for="answer">Your answer</label>
+      <input id="answer" type="text" placeholder="Type discovered clue" autocomplete="off" />
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="submit">Submit</button>
+        <button id="hint" class="ghost">Hint</button>
+        <button id="regen" class="ghost">New seed</button>
+      </div>
+      <div id="hintBox" class="muted" style="margin-top:8px">Use DevTools: Elements → Styles / Computed / Console.</div>
+    </div>
+
+    <div class="panel">
+      <strong>Dynamic CSS grid (inspect computed styles)</strong>
+      <p class="muted">Several cells have custom properties. Toggle the <span class="kbd">--s</span> custom property to <span class="kbd">1</span> in the inspector to reveal characters. The actual characters are set at runtime; they are not in the original HTML source.</p>
+      <div id="cssGrid" class="css-grid" aria-hidden="true"></div>
+    </div>
+
+    <div class="panel">
+      <strong>Console helpers</strong>
+      <p class="muted">Open Console. A small help API is exposed here for testing. This is part of the puzzle — some steps require running the function printed below.</p>
+      <div class="log" id="consoleLog"></div>
+    </div>
+
+    <div class="panel">
+      <strong>Final</strong>
+      <label for="finalInput">Final passphrase</label>
+      <input id="finalInput" type="text" disabled placeholder="Locked until step 10" />
+      <button id="finalBtn" disabled>Submit final</button>
+      <div id="finalMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+
+  </div>
+
+  <script>
+    /*********************************************************************
+     * Hard-mode: dynamic clues generated at runtime from a seed.         *
+     * - The server-served HTML intentionally contains NO clue words.      *
+     * - Words are derived from a deterministic PRNG seeded from a value  *
+     *   stored in sessionStorage or provided via ?seed= query param.    *
+     * - CSS clue grid is populated at runtime with CSS custom properties  *
+     *   so the characters appear only when the player toggles --s to 1   *
+     *   in the inspector (computed styles). This forces using DevTools.  *
+     *********************************************************************/
+
+    // Wordlist (not directly the clues; we'll map indexes -> words at runtime)
+    const WORDS = [
+      'ALPHA','BRAVO','CHARLIE','DELTA','ECHO','FOXTROT','GOLF','HOTEL','INDIA','JULIET',
+      'KILO','LIMA','MIKE','NOVEMBER','OSCAR','PAPA','QUEBEC','ROMEO','SIERRA','TANGO',
+      'UNIFORM','VICTOR','WHISKEY','XRAY','YANKEE','ZULU','PEN','KEY','GOLD','STEEL',
+      'BRIDGE','RIVER','JOIN','PLACE','STEEP'
+    ];
+
+    // Simple xorshift32 PRNG seeded by an integer
+    function xorshift32(seed){
+      let x = seed >>> 0;
+      return function(){
+        x ^= x << 13; x >>>= 0;
+        x ^= x >>> 17; x >>>= 0;
+        x ^= x << 5; x >>>= 0;
+        return x / 0xFFFFFFFF;
+      }
+    }
+
+    // Read or create seed
+    function getSeed(){
+      const p = new URLSearchParams(location.search);
+      let s = p.get('seed');
+      if(s){ sessionStorage.setItem('clue_seed', s); }
+      s = sessionStorage.getItem('clue_seed');
+      if(!s){ s = Math.floor(Math.random()*1e9).toString(36); sessionStorage.setItem('clue_seed', s); }
+      return s;
+    }
+
+    const seed = getSeed();
+    document.getElementById('seedLabel').textContent = seed;
+
+    // Turn the ASCII chars of the seed into an integer for PRNG
+    function seedToInt(str){
+      let n = 2166136261 >>> 0; // FNV offset basis
+      for(let i=0;i<str.length;i++){ n ^= str.charCodeAt(i); n += (n<<1) + (n<<4) + (n<<7) + (n<<8) + (n<<24); n >>>= 0; }
+      return n >>> 0;
+    }
+
+    const rand = xorshift32(seedToInt(seed));
+
+    // Determine 10 clue words (indexes from WORDS) at runtime
+    const CLUE_COUNT = 10;
+    const clues = [];
+    for(let i=0;i<CLUE_COUNT;i++){
+      const idx = Math.floor(rand()* (WORDS.length));
+      clues.push(WORDS[idx]);
+    }
+
+    // We'll create a CSS grid of 8x? cells; each step's word will be encoded into several cells
+    const grid = document.getElementById('cssGrid');
+    const totalCells = 8 * 4; // 4 rows of 8
+    const cells = [];
+    for(let i=0;i<totalCells;i++){
+      const el = document.createElement('div');
+      el.className = 'css-cell';
+      // We'll set custom props later
+      grid.appendChild(el);
+      cells.push(el);
+    }
+
+    // Helper: map a character to a visible token
+    function charToken(ch){
+      // only letters & dash; unknown -> '.'
+      if(!ch) return '.';
+      const c = ch.toUpperCase();
+      if(c >= 'A' && c <= 'Z') return c;
+      if(c === '-') return '-';
+      return '.';
+    }
+
+    // Place clues into the CSS cells as custom properties. Do NOT set their --s (show) prop
+    // The player must toggle --s to 1 on each cell (or on the parent via inspector) to reveal characters.
+    // We'll distribute words across the grid: each word occupies a contiguous run of cells.
+
+    let ptr = 0;
+    const mapping = [];
+    for(let wi=0; wi<clues.length; wi++){
+      const w = clues[wi];
+      const chars = w.split('');
+      const len = Math.min(chars.length, 6); // limit per word to make it harder
+      // pick a start position pseudo-randomly but deterministic
+      const start = Math.floor(rand() * (totalCells - len));
+      mapping.push({word:w, start, len});
+      for(let j=0;j<len;j++){
+        const cell = cells[start + j];
+        const token = charToken(chars[j]);
+        // set a CSS var with the token; not visible by default
+        cell.style.setProperty('--t', '"' + token + '"');
+        // color hides info; we'll set a color that encodes extra bits in its hex, but we won't reveal decoding here
+        const colorCode = '#' + ((Math.floor(rand()*0xFFFFFF))>>>0).toString(16).padStart(6,'0');
+        cell.style.setProperty('--c', colorCode);
+        cell.style.setProperty('background', 'linear-gradient(90deg,'+colorCode+' 0%, rgba(0,0,0,0) 100%)');
+        // ensure not shown by default
+        cell.style.setProperty('--s', '0');
+      }
+    }
+
+    // Provide a minimal help API in the console. This is intentional: some steps require calling these.
+    window._clueApi = {
+      listMapping: function(){ console.log('Mapping (start,len) for each word — but the words are hidden):', mapping.map(m=>({start:m.start,len:m.len}))); },
+      revealWord: function(index){ if(index<0||index>=mapping.length) return console.log('index out of range'); const m = mapping[index]; const text = m.word; console.log('Hint: word at index', index, 'has length', m.len, ' — try to reveal cells starting at', m.start); },
+      seed: seed,
+      cluesMasked: function(){ return mapping.map(m=>({start:m.start,len:m.len})); }
+    };
+
+    // Print minimal pointers to console (no words)
+    const consoleLog = document.getElementById('consoleLog');
+    function clog(msg){ console.log(msg); consoleLog.textContent += '
+'+msg; }
+    clog('Dev API available: _clueApi. Use _clueApi.listMapping() and _clueApi.revealWord(index) to learn positions. Words are not printed.');
+    clog('To reveal letters in the CSS grid, in Elements select a .css-cell and toggle the custom property --s to 1 (Computed > Styles) or add style="--s:1" to the element.');
+
+    // UI state & validation: answers are checked against runtime-generated clues
+    const stepNum = document.getElementById('stepNum');
+    const inst = document.getElementById('inst');
+    const answer = document.getElementById('answer');
+    const submit = document.getElementById('submit');
+    const hintBtn = document.getElementById('hint');
+    const regen = document.getElementById('regen');
+    const finalInput = document.getElementById('finalInput');
+    const finalBtn = document.getElementById('finalBtn');
+    const finalMsg = document.getElementById('finalMsg');
+
+    let current = 1;
+    function updateUI(){ stepNum.textContent = current; inst.textContent = 'Step '+current+': Use the grid and API to find the word at index '+(current-1)+'.'; }
+    updateUI();
+
+    // Normalize answers
+    function norm(s){ return (s||'').toString().replace(/[^A-Za-z0-9\-]/g,'').toUpperCase(); }
+
+    submit.addEventListener('click', ()=>{
+      const val = norm(answer.value);
+      const expected = norm(clues[current-1]);
+      if(val === expected){
+        clog('Correct — ' + clues[current-1]);
+        current++;
+        answer.value = '';
+        if(current > CLUE_COUNT){
+          // unlock final input: final passphrase is the hyphen-joined clues
+          finalInput.disabled = false; finalBtn.disabled = false;
+          finalInput.placeholder = 'Enter final passphrase (words hyphen-separated)';
+          inst.textContent = 'All clues found. Enter final passphrase.';
+        } else {
+          updateUI();
+        }
+      } else {
+        clog('Incorrect. Try revealing the cells for this step by toggling --s to 1 in the inspector.');
+      }
+    });
+
+    hintBtn.addEventListener('click', ()=>{
+      // Give a hint: show mapping for this word (start,len) without revealing actual letters
+      const m = mapping[current-1];
+      clog('HINT: word #' + (current-1) + ' occupies cells starting at index ' + m.start + ' for length ' + m.len + '. Use _clueApi.revealWord('+ (current-1) +') for a position hint.');
+    });
+
+    regen.addEventListener('click', ()=>{
+      // Create a new seed and reload
+      const ns = Math.floor(Math.random()*1e9).toString(36);
+      sessionStorage.setItem('clue_seed', ns);
+      clog('New seed set: ' + ns + '. Reloading...');
+      location.reload();
+    });
+
+    // Final submission check
+    finalBtn.addEventListener('click', ()=>{
+      const given = norm(finalInput.value);
+      const expected = norm(clues.join('-'));
+      if(given === expected){ finalMsg.style.color='lightgreen'; finalMsg.textContent = '🎉 Congratulations — you solved the Hard Mode!'; clog('FINAL: success'); }
+      else { finalMsg.style.color='#ffb4b4'; finalMsg.textContent = 'Final passphrase incorrect. Combine the 10 words with hyphens.'; clog('FINAL: incorrect'); }
+    });
+
+    // Accessibility: allow revealing all cells via console command for testing (but it does NOT print words)
+    window._revealCellsForTesting = function(){ cells.forEach(c=>c.style.setProperty('--s','1')); clog('All cells set to --s:1 for testing (letters will appear if you toggle).'); };
+
+    // Note to implementer: you can adjust mapping algorithm, wordlist, and visual encoding to increase difficulty.
+  </script>
+</body>
+</html>
